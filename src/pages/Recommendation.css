@@ -1,0 +1,19 @@
+.rec-harvest-summary {
+  padding: 16px 20px;
+}
+
+.rec-main-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 8px;
+}
+
+.rec-best-market {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 900px) {
+  .rec-main-grid { grid-template-columns: 1fr; }
+}
