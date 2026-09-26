@@ -1,18 +1,35 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import NotificationCard from '../components/NotificationCard';
-import { mockNotifications } from '../data/mockData';
+import { useAuth } from '../context/AuthContext';
+import { getNotifications, markRead, markAllRead } from '../services/notificationService';
 import { FaBell, FaCheckDouble } from 'react-icons/fa';
 
-export default function Notifications({ farmer, onLogout }) {
-  const [notifications, setNotifications] = useState(mockNotifications);
+export default function Notifications({ onLogout }) {
+  const { farmer } = useAuth();
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  const markRead = (id) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  useEffect(() => {
+    getNotifications()
+      .then(res => setNotifications(res.data))
+      .catch(() => setError('Failed to load notifications.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleMarkRead = async (id) => {
+    try {
+      await markRead(id);
+      setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n));
+    } catch {}
   };
 
-  const markAllRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  const handleMarkAllRead = async () => {
+    try {
+      await markAllRead();
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    } catch {}
   };
 
   const unread = notifications.filter(n => !n.read).length;
@@ -28,21 +45,22 @@ export default function Notifications({ farmer, onLogout }) {
             </p>
           </div>
           {unread > 0 && (
-            <button className="btn btn-outline btn-sm" onClick={markAllRead}>
+            <button className="btn btn-outline btn-sm" onClick={handleMarkAllRead}>
               <FaCheckDouble /> Mark All as Read
             </button>
           )}
         </div>
 
-        {notifications.length === 0 ? (
-          <div className="empty-state">
-            <FaBell />
-            <p>No notifications yet.</p>
-          </div>
+        {loading ? (
+          <div className="flex-center" style={{ padding: 40 }}><span className="spinner" /></div>
+        ) : error ? (
+          <div className="alert alert-error">{error}</div>
+        ) : notifications.length === 0 ? (
+          <div className="empty-state"><FaBell /><p>No notifications yet.</p></div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {notifications.map(n => (
-              <NotificationCard key={n.id} notification={n} onMarkRead={markRead} />
+              <NotificationCard key={n._id} notification={n} onMarkRead={() => handleMarkRead(n._id)} />
             ))}
           </div>
         )}

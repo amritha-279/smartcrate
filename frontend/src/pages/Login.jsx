@@ -1,45 +1,57 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FaLeaf, FaMobileAlt, FaShieldAlt, FaArrowLeft } from 'react-icons/fa';
+import { useAuth } from '../context/AuthContext';
+import { sendOtp, verifyOtp } from '../services/authService';
 import './Login.css';
 
-// Future: Replace with POST /api/auth/send-otp and POST /api/auth/verify-otp
-const MOCK_OTP = '1234';
-
-export default function Login({ onLogin }) {
+export default function Login() {
   const navigate = useNavigate();
+  const { login } = useAuth();
   const [mobile, setMobile] = useState('');
   const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [devNote, setDevNote] = useState('');
 
-  const handleSendOtp = () => {
+  const handleSendOtp = async () => {
     setError('');
     if (!/^\d{10}$/.test(mobile)) {
       setError('Please enter a valid 10-digit mobile number.');
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
+    try {
+      const res = await sendOtp(mobile);
       setOtpSent(true);
-      setSuccess(`OTP sent to +91 ${mobile}. (Demo OTP: ${MOCK_OTP})`);
-    }, 1200);
+      setSuccess(`OTP sent to +91 ${mobile}`);
+      if (res.data.devNote) setDevNote(res.data.devNote);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to send OTP. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleVerifyOtp = () => {
+  const handleVerifyOtp = async () => {
     setError('');
     if (!otp) { setError('Please enter the OTP.'); return; }
-    if (otp !== MOCK_OTP) { setError('Invalid OTP. Please try again. (Demo OTP: 1234)'); return; }
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      localStorage.setItem('sc_auth', JSON.stringify({ mobile, loggedIn: true }));
-      onLogin && onLogin();
+    try {
+      const res = await verifyOtp(mobile, otp);
+      login(res.data.token, res.data.farmer);
       navigate('/dashboard');
-    }, 1000);
+    } catch (err) {
+      if (err.response?.data?.needsRegistration) {
+        navigate('/register', { state: { mobile, otp } });
+      } else {
+        setError(err.response?.data?.message || 'Invalid OTP. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -50,9 +62,7 @@ export default function Login({ onLogin }) {
             <div className="login-brand-icon"><FaLeaf /></div>
             <span>SmartCrate</span>
           </div>
-          <h2 className="login-left-title">
-            Helping Farmers Make Smarter Decisions
-          </h2>
+          <h2 className="login-left-title">Helping Farmers Make Smarter Decisions</h2>
           <p className="login-left-desc">
             Predict shelf life, compare market prices, and get the best selling recommendation for your harvest.
           </p>
@@ -76,12 +86,8 @@ export default function Login({ onLogin }) {
             <p>Enter your mobile number to receive an OTP</p>
           </div>
 
-          {success && (
-            <div className="alert alert-success">{success}</div>
-          )}
-          {error && (
-            <div className="alert alert-error">{error}</div>
-          )}
+          {success && <div className="alert alert-success">{success}</div>}
+          {error && <div className="alert alert-error">{error}</div>}
 
           <div className="form-group">
             <label className="form-label">Mobile Number *</label>
@@ -132,17 +138,18 @@ export default function Login({ onLogin }) {
               <button
                 className="btn btn-outline"
                 style={{ width: '100%', justifyContent: 'center' }}
-                onClick={() => { setOtpSent(false); setOtp(''); setSuccess(''); setError(''); }}
+                onClick={() => { setOtpSent(false); setOtp(''); setSuccess(''); setError(''); setDevNote(''); }}
               >
                 Change Mobile Number
               </button>
             </>
           )}
 
-          <div className="login-demo-note">
-            <span className="demo-badge">Demo Mode</span>
-            Use any 10-digit number and OTP: <strong>1234</strong>
-          </div>
+          {devNote && (
+            <div className="login-demo-note">
+              <span className="demo-badge">Dev Mode</span> {devNote}
+            </div>
+          )}
         </div>
       </div>
     </div>

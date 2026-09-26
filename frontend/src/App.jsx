@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { mockFarmer } from './data/mockData';
+import { AuthProvider, useAuth } from './context/AuthContext';
 
 import Landing from './pages/Landing';
 import Login from './pages/Login';
+import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import AddHarvest from './pages/AddHarvest';
 import Prediction from './pages/Prediction';
@@ -16,107 +17,49 @@ import Admin from './pages/Admin';
 
 import './styles/global.css';
 
-// Protected route wrapper
-function ProtectedRoute({ children, isLoggedIn }) {
+function ProtectedRoute({ children }) {
+  const { isLoggedIn, loading } = useAuth();
+  if (loading) return <div className="flex-center" style={{ minHeight: '100vh' }}><span className="spinner" /></div>;
   return isLoggedIn ? children : <Navigate to="/login" replace />;
 }
 
+function AdminRoute({ children }) {
+  const { isLoggedIn, farmer, loading } = useAuth();
+  if (loading) return <div className="flex-center" style={{ minHeight: '100vh' }}><span className="spinner" /></div>;
+  if (!isLoggedIn) return <Navigate to="/login" replace />;
+  if (farmer?.role !== 'admin') return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+function AppRoutes() {
+  const { isLoggedIn } = useAuth();
+  return (
+    <Routes>
+      <Route path="/" element={<Landing />} />
+      <Route path="/login" element={isLoggedIn ? <Navigate to="/dashboard" replace /> : <Login />} />
+      <Route path="/register" element={isLoggedIn ? <Navigate to="/dashboard" replace /> : <Register />} />
+
+      <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+      <Route path="/add-harvest" element={<ProtectedRoute><AddHarvest /></ProtectedRoute>} />
+      <Route path="/prediction/:harvestId?" element={<ProtectedRoute><Prediction /></ProtectedRoute>} />
+      <Route path="/markets" element={<ProtectedRoute><Markets /></ProtectedRoute>} />
+      <Route path="/recommendation/:harvestId?" element={<ProtectedRoute><Recommendation /></ProtectedRoute>} />
+      <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
+      <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
+      <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+      <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [farmer, setFarmer] = useState(mockFarmer);
-
-  useEffect(() => {
-    const auth = localStorage.getItem('sc_auth');
-    if (auth) {
-      try {
-        const parsed = JSON.parse(auth);
-        if (parsed.loggedIn) setIsLoggedIn(true);
-      } catch {
-        localStorage.removeItem('sc_auth');
-      }
-    }
-  }, []);
-
-  const handleLogin = () => {
-    localStorage.setItem('sc_auth', JSON.stringify({ loggedIn: true }));
-    setIsLoggedIn(true);
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('sc_auth');
-    setIsLoggedIn(false);
-  };
-
-  const handleAddHarvest = (newHarvest) => {
-    // Future: POST /api/harvest — for now just update local state
-    console.log('New harvest added:', newHarvest);
-  };
-
-  const handleUpdateFarmer = (updatedFarmer) => {
-    // Future: PUT /api/farmer/profile
-    setFarmer(updatedFarmer);
-  };
-
-  const dashboardProps = { farmer, onLogout: handleLogout };
-
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route path="/login" element={
-          isLoggedIn ? <Navigate to="/dashboard" replace /> :
-            <Login onLogin={handleLogin} />
-        } />
-
-        <Route path="/dashboard" element={
-          <ProtectedRoute isLoggedIn={isLoggedIn}>
-            <Dashboard {...dashboardProps} />
-          </ProtectedRoute>
-        } />
-        <Route path="/add-harvest" element={
-          <ProtectedRoute isLoggedIn={isLoggedIn}>
-            <AddHarvest {...dashboardProps} onAddHarvest={handleAddHarvest} />
-          </ProtectedRoute>
-        } />
-        <Route path="/prediction" element={
-          <ProtectedRoute isLoggedIn={isLoggedIn}>
-            <Prediction {...dashboardProps} />
-          </ProtectedRoute>
-        } />
-        <Route path="/markets" element={
-          <ProtectedRoute isLoggedIn={isLoggedIn}>
-            <Markets {...dashboardProps} />
-          </ProtectedRoute>
-        } />
-        <Route path="/recommendation" element={
-          <ProtectedRoute isLoggedIn={isLoggedIn}>
-            <Recommendation {...dashboardProps} />
-          </ProtectedRoute>
-        } />
-        <Route path="/history" element={
-          <ProtectedRoute isLoggedIn={isLoggedIn}>
-            <History {...dashboardProps} />
-          </ProtectedRoute>
-        } />
-        <Route path="/notifications" element={
-          <ProtectedRoute isLoggedIn={isLoggedIn}>
-            <Notifications {...dashboardProps} />
-          </ProtectedRoute>
-        } />
-        <Route path="/profile" element={
-          <ProtectedRoute isLoggedIn={isLoggedIn}>
-            <Profile {...dashboardProps} onUpdateFarmer={handleUpdateFarmer} />
-          </ProtectedRoute>
-        } />
-        <Route path="/admin" element={
-          <ProtectedRoute isLoggedIn={isLoggedIn}>
-            <Admin {...dashboardProps} />
-          </ProtectedRoute>
-        } />
-
-        {/* Catch-all */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
     </BrowserRouter>
   );
 }

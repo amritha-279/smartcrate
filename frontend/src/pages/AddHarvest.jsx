@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DashboardLayout from '../layouts/DashboardLayout';
 import InputField from '../components/InputField';
-import { cropTypes, maturityStages, storageConditions } from '../data/mockData';
-import { predictShelfLife } from '../utils/predictionUtils';
+import { useAuth } from '../context/AuthContext';
+import { createHarvest } from '../services/harvestService';
+import { postSensorReading, getLatestReading } from '../services/sensorService';
 import {
   FaSeedling, FaThermometerHalf, FaTint, FaFlask,
   FaCheckCircle, FaChartLine, FaMicrochip, FaWifi,
@@ -11,54 +12,37 @@ import {
 } from 'react-icons/fa';
 import './AddHarvest.css';
 
-// Helper: get today's date as YYYY-MM-DD
+const cropTypes = [
+  'Tomato', 'Onion', 'Banana', 'Potato', 'Carrot',
+  'Brinjal', 'Okra', 'Cabbage', 'Cauliflower', 'Spinach',
+  'Mango', 'Grapes', 'Papaya', 'Guava', 'Pomegranate',
+];
+
 const todayDate = () => new Date().toISOString().split('T')[0];
-// Helper: get current time as HH:MM
 const currentTime = () => new Date().toTimeString().slice(0, 5);
 
-// Mock maturity detection based on ethylene level (future: image AI / sensor model)
-const detectMaturity = (ethylene) => {
-  if (ethylene > 3.5) return 'Over-Ripe';
-  if (ethylene > 2.5) return 'Fully Ripe';
-  if (ethylene > 1.5) return 'Semi-Ripe';
-  return 'Mature';
-};
-
-// Mock storage detection based on temperature (future: storage unit sensor profile)
-const detectStorage = (temp) => {
-  if (temp < 8) return 'Refrigerated';
-  if (temp < 15) return 'Cold Room';
-  if (temp < 22) return 'Cool Storage';
-  return 'Open Shed';
-};
-
 const initialForm = {
-  cropType: '', variety: '', quantity: '',
-  harvestDate: todayDate(),
-  harvestTime: currentTime(),
-  maturityStage: '', storageCondition: '',
-  temperature: '', humidity: '', ethyleneLevel: '', vocLevel: '',
+  crop: '', variety: '', quantity: '',
+  harvestDate: todayDate(), harvestTime: currentTime(),
+  maturityStage: '', storageType: '', storageCondition: '',
 };
 
-export default function AddHarvest({ farmer, onAddHarvest, onLogout }) {
+export default function AddHarvest({ onLogout }) {
   const navigate = useNavigate();
+  const { farmer } = useAuth();
   const [form, setForm] = useState(initialForm);
   const [errors, setErrors] = useState({});
-  const [prediction, setPrediction] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [savedHarvestId, setSavedHarvestId] = useState(null);
   const [sensorLoading, setSensorLoading] = useState(false);
-  const [sensorFetched, setSensorFetched] = useState(false);
+  const [sensorData, setSensorData] = useState(null);
   const [sensorError, setSensorError] = useState('');
+  const [apiError, setApiError] = useState('');
 
-  // Auto-refresh date/time every minute
   useEffect(() => {
     const interval = setInterval(() => {
-      setForm(prev => ({
-        ...prev,
-        harvestDate: todayDate(),
-        harvestTime: currentTime(),
-      }));
+      setForm(prev => ({ ...prev, harvestDate: todayDate(), harvestTime: currentTime() }));
     }, 60000);
     return () => clearInterval(interval);
   }, []);
@@ -69,127 +53,107 @@ export default function AddHarvest({ farmer, onAddHarvest, onLogout }) {
     if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }));
   };
 
-  // Future: GET /api/sensor/latest — reads live data from IoT hardware
-  // Also auto-detects maturity stage and storage condition from sensor readings
-  const handleFetchSensorData = () => {
+  /**
+   * In development: posts a simulated sensor reading to the backend.
+   * In production: the ESP32 posts directly to POST /api/sensors/readings.
+   * The frontend polls GET /api/sensors/readings/:harvestId for the latest reading.
+   */
+  const handleFetchSensorData = async () => {
+    if (!savedHarvestId) {
+      setSensorError('Save the harvest first, then fetch sensor data.');
+      return;
+    }
     setSensorLoading(true);
     setSensorError('');
-    setSensorFetched(false);
-    setTimeout(() => {
-      const temp = parseFloat((26 + Math.random() * 10).toFixed(1));
-      const humidity = parseFloat((55 + Math.random() * 25).toFixed(1));
-      const ethylene = parseFloat((0.8 + Math.random() * 3).toFixed(2));
-      const voc = parseFloat((0.4 + Math.random() * 1.8).toFixed(2));
-
-      setForm(prev => ({
-        ...prev,
-        temperature: String(temp),
-        humidity: String(humidity),
-        ethyleneLevel: String(ethylene),
-        vocLevel: String(voc),
-        maturityStage: detectMaturity(ethylene),
-        storageCondition: detectStorage(temp),
-      }));
-      setSensorFetched(true);
+    try {
+      if (import.meta.env.DEV) {
+        // Dev simulator: post a simulated reading on behalf of the device
+        const simulated = {
+          harvestId: savedHarvestId,
+          temperature: parseFloat((26 + Math.random() * 10).toFixed(1)),
+          humidity: parseFloat((55 + Math.random() * 25).toFixed(1)),
+          ethylene: parseFloat((0.8 + Math.random() * 3).toFixed(2)),
+          voc: parseFloat((0.4 + Math.random() * 1.8).toFixed(2)),
+          co2: parseFloat((400 + Math.random() * 300).toFixed(0)),
+        };
+        await postSensorReading(simulated);
+      }
+      // Poll latest reading (works for both real ESP32 and simulator)
+      const res = await getLatestReading(savedHarvestId);
+      setSensorData(res.data);
+    } catch (err) {
+      setSensorError(err.response?.data?.message || 'Failed to fetch sensor data.');
+    } finally {
       setSensorLoading(false);
-    }, 1800);
+    }
   };
 
   const validate = () => {
     const e = {};
-    if (!form.cropType) e.cropType = 'Crop type is required.';
+    if (!form.crop) e.crop = 'Crop type is required.';
     if (!form.quantity || isNaN(form.quantity) || +form.quantity <= 0) e.quantity = 'Enter a valid quantity.';
     if (!form.harvestDate) e.harvestDate = 'Harvest date is required.';
-    if (!form.maturityStage) e.maturityStage = 'Fetch sensor data to detect maturity.';
-    if (!form.storageCondition) e.storageCondition = 'Fetch sensor data to detect storage.';
-    if (!form.temperature || isNaN(form.temperature)) e.temperature = 'Fetch sensor data first.';
-    if (!form.humidity || isNaN(form.humidity)) e.humidity = 'Fetch sensor data first.';
     return e;
   };
 
-  const handlePredict = () => {
+  const handleSave = async () => {
     const e = validate();
     if (Object.keys(e).length) { setErrors(e); return; }
-    setLoading(true);
-    // Future: POST /api/prediction
-    setTimeout(() => {
-      const result = predictShelfLife(form);
-      setPrediction(result);
-      setLoading(false);
-    }, 1000);
+    setSaving(true);
+    setApiError('');
+    try {
+      const res = await createHarvest({
+        ...form,
+        quantity: Number(form.quantity),
+        farmerLocation: farmer?.location,
+      });
+      setSavedHarvestId(res.data._id);
+      setSaved(true);
+    } catch (err) {
+      setApiError(err.response?.data?.message || 'Failed to save harvest.');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleSave = () => {
-    const e = validate();
-    if (Object.keys(e).length) { setErrors(e); return; }
-    if (!prediction) { handlePredict(); return; }
-    setLoading(true);
-    // Future: POST /api/harvest
-    setTimeout(() => {
-      const newHarvest = {
-        ...form,
-        id: `H${Date.now()}`,
-        crop: form.cropType,
-        predictedShelfLife: prediction.shelfLife,
-        remainingShelfLife: prediction.shelfLife,
-        spoilageRisk: prediction.risk,
-        recommendation: prediction.risk === 'High' ? 'Sell Today' : 'Wait for a Better Price',
-        status: 'Active',
-      };
-      onAddHarvest && onAddHarvest(newHarvest);
-      setSaved(true);
-      setLoading(false);
-      setTimeout(() => navigate('/prediction', { state: { harvest: newHarvest, prediction } }), 1200);
-    }, 800);
+  const handleGoToPredict = () => {
+    if (savedHarvestId) navigate(`/prediction/${savedHarvestId}`);
   };
 
   return (
     <DashboardLayout farmer={farmer} pageTitle="Add Harvest" onLogout={onLogout}>
       <div className="page-content">
         <h1 className="page-title">Add New Harvest</h1>
-        <p className="page-subtitle">
-          Fill in your crop details. Environmental data and conditions are auto-detected from hardware.
-        </p>
+        <p className="page-subtitle">Fill in your crop details. Sensor data is fetched from the IoT device after saving.</p>
 
         {saved && (
           <div className="alert alert-success">
-            <FaCheckCircle /> Harvest saved successfully! Redirecting to prediction...
+            <FaCheckCircle /> Harvest saved! Now fetch sensor data, then go to Prediction.
           </div>
         )}
+        {apiError && <div className="alert alert-error">{apiError}</div>}
 
         <div className="add-harvest-grid">
-
-          {/* ── Crop Details ── */}
+          {/* Crop Details */}
           <div className="card">
-            <div className="add-harvest-section-title">
-              <FaSeedling /> Crop Details
-            </div>
-
-            {/* Manual fields */}
-            <div className="auto-section-label">
-              <FaSeedling style={{ fontSize: '0.8rem' }} /> Enter manually
-            </div>
+            <div className="add-harvest-section-title"><FaSeedling /> Crop Details</div>
+            <div className="auto-section-label"><FaSeedling style={{ fontSize: '0.8rem' }} /> Enter manually</div>
             <div className="form-row-2">
-              <InputField label="Crop Type" name="cropType" type="select"
-                value={form.cropType} onChange={handleChange}
-                options={cropTypes} error={errors.cropType} required />
+              <InputField label="Crop Type" name="crop" type="select"
+                value={form.crop} onChange={handleChange}
+                options={cropTypes} error={errors.crop} required />
               <InputField label="Variety" name="variety" type="text"
-                value={form.variety} onChange={handleChange}
-                placeholder="e.g. Hybrid, Nendran" />
+                value={form.variety} onChange={handleChange} placeholder="e.g. Hybrid, Nendran" />
             </div>
             <InputField label="Quantity (kg)" name="quantity" type="number"
               value={form.quantity} onChange={handleChange}
               placeholder="e.g. 120" error={errors.quantity} required min="1" />
+            <InputField label="Storage Type" name="storageType" type="text"
+              value={form.storageType} onChange={handleChange} placeholder="e.g. Open Shed, Cold Room" />
 
             <hr className="divider" />
-
-            {/* Auto-filled fields */}
-            <div className="auto-section-label">
-              <FaRobot style={{ fontSize: '0.8rem' }} /> Auto-filled by system
-            </div>
-
+            <div className="auto-section-label"><FaRobot style={{ fontSize: '0.8rem' }} /> Auto-filled by system</div>
             <div className="form-row-2">
-              {/* Harvest Date — auto */}
               <div className="auto-field">
                 <div className="auto-field-icon"><FaCalendarAlt /></div>
                 <div className="auto-field-body">
@@ -198,8 +162,6 @@ export default function AddHarvest({ farmer, onAddHarvest, onLogout }) {
                 </div>
                 <span className="badge badge-info">Auto</span>
               </div>
-
-              {/* Harvest Time — auto */}
               <div className="auto-field">
                 <div className="auto-field-icon"><FaClock /></div>
                 <div className="auto-field-body">
@@ -208,238 +170,80 @@ export default function AddHarvest({ farmer, onAddHarvest, onLogout }) {
                 </div>
                 <span className="badge badge-info">Auto</span>
               </div>
-
-              {/* Maturity Stage — auto from sensor */}
-              <div className={`auto-field ${!sensorFetched ? 'auto-field-pending' : ''}`}>
-                <div className="auto-field-icon"><FaMicrochip /></div>
-                <div className="auto-field-body">
-                  <div className="auto-field-label">Maturity Stage</div>
-                  <div className="auto-field-value">
-                    {sensorFetched ? form.maturityStage : '—'}
-                  </div>
-                </div>
-                {sensorFetched
-                  ? <span className="badge badge-success">Detected</span>
-                  : <span className="badge" style={{ background: '#f7fafc', color: '#a0aec0', border: '1px solid #e2e8f0' }}>Pending</span>
-                }
-                {errors.maturityStage && <div className="form-error" style={{ gridColumn: '1/-1' }}>{errors.maturityStage}</div>}
-              </div>
-
-              {/* Storage Condition — auto from sensor */}
-              <div className={`auto-field ${!sensorFetched ? 'auto-field-pending' : ''}`}>
-                <div className="auto-field-icon"><FaLock /></div>
-                <div className="auto-field-body">
-                  <div className="auto-field-label">Storage Condition</div>
-                  <div className="auto-field-value">
-                    {sensorFetched ? form.storageCondition : '—'}
-                  </div>
-                </div>
-                {sensorFetched
-                  ? <span className="badge badge-success">Detected</span>
-                  : <span className="badge" style={{ background: '#f7fafc', color: '#a0aec0', border: '1px solid #e2e8f0' }}>Pending</span>
-                }
-                {errors.storageCondition && <div className="form-error" style={{ gridColumn: '1/-1' }}>{errors.storageCondition}</div>}
-              </div>
             </div>
-
-            {!sensorFetched && (
-              <div className="auto-pending-note">
-                <FaMicrochip /> Maturity and Storage will be auto-detected once you fetch sensor data →
-              </div>
-            )}
           </div>
 
-          {/* ── Sensor Data ── */}
+          {/* Sensor Data */}
           <div className="card">
-            <div className="add-harvest-section-title">
-              <FaMicrochip /> Sensor Data
-            </div>
-
+            <div className="add-harvest-section-title"><FaMicrochip /> Sensor Data</div>
             <div className="sensor-panel">
               <div className="sensor-panel-left">
-                <div className="sensor-status-dot"
-                  style={{ background: sensorFetched ? 'var(--risk-low)' : '#aaa' }} />
+                <div className="sensor-status-dot" style={{ background: sensorData ? 'var(--risk-low)' : '#aaa' }} />
                 <div>
                   <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-dark)' }}>
-                    {sensorFetched ? 'Sensor Data Received' : 'Hardware Sensor'}
+                    {sensorData ? 'Sensor Data Received' : 'Hardware Sensor'}
                   </div>
                   <div style={{ fontSize: '0.78rem', color: 'var(--text-light)' }}>
-                    {sensorFetched
-                      ? 'Live readings loaded — maturity & storage auto-detected'
-                      : 'Click to fetch live readings from device'}
+                    {sensorData
+                      ? `Source: ${sensorData.source} — ${new Date(sensorData.timestamp).toLocaleTimeString()}`
+                      : saved ? 'Click to fetch live readings from device' : 'Save harvest first to enable sensor fetch'}
                   </div>
                 </div>
               </div>
               <button
                 type="button"
-                className={`btn btn-sm ${sensorFetched ? 'btn-outline' : 'btn-primary'}`}
+                className={`btn btn-sm ${sensorData ? 'btn-outline' : 'btn-primary'}`}
                 onClick={handleFetchSensorData}
-                disabled={sensorLoading}
+                disabled={sensorLoading || !saved}
               >
-                {sensorLoading ? (
-                  <><span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> Reading Sensor...</>
-                ) : sensorFetched ? (
-                  <><FaSyncAlt /> Refresh Data</>
-                ) : (
-                  <><FaWifi /> Fetch Sensor Data</>
-                )}
+                {sensorLoading
+                  ? <><span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> Reading...</>
+                  : sensorData ? <><FaSyncAlt /> Refresh</> : <><FaWifi /> Fetch Sensor Data</>}
               </button>
             </div>
 
             {sensorError && <div className="alert alert-error" style={{ marginBottom: 12 }}>{sensorError}</div>}
 
-            {!sensorFetched && !sensorLoading && (
+            {!sensorData && !sensorLoading && (
               <div className="sensor-placeholder">
                 <FaMicrochip style={{ fontSize: '2rem', color: 'var(--border)', marginBottom: 8 }} />
-                <p>Sensor readings will appear here.</p>
-                <p style={{ fontSize: '0.8rem', marginTop: 4 }}>
-                  Fetching also auto-detects <strong>Maturity Stage</strong> and <strong>Storage Condition</strong>.
-                </p>
+                <p>{saved ? 'Sensor readings will appear here after fetching.' : 'Save the harvest first.'}</p>
               </div>
             )}
 
-            {sensorLoading && (
-              <div className="sensor-placeholder">
-                <span className="spinner" style={{ marginBottom: 10 }} />
-                <p style={{ color: 'var(--text-medium)' }}>Connecting to sensor device...</p>
+            {sensorData && (
+              <div className="form-row-2">
+                {[
+                  { label: 'Temperature', value: `${sensorData.temperature} °C`, icon: <FaThermometerHalf />, bg: '#fff5f5', color: 'var(--risk-high)' },
+                  { label: 'Humidity', value: `${sensorData.humidity} %`, icon: <FaTint />, bg: '#ebf8ff', color: '#2b6cb0' },
+                  { label: 'Ethylene', value: `${sensorData.ethylene} ppm`, icon: <FaFlask />, bg: '#f0fff4', color: 'var(--risk-low)' },
+                  { label: 'VOC', value: `${sensorData.voc} ppm`, icon: <FaFlask />, bg: '#fffaf0', color: 'var(--risk-medium)' },
+                ].map(({ label, value, icon, bg, color }) => (
+                  <div className="sensor-field" key={label}>
+                    <div className="sensor-field-icon" style={{ background: bg, color }}>{icon}</div>
+                    <div className="sensor-field-body">
+                      <div className="sensor-field-label">{label}</div>
+                      <div className="sensor-field-value">{value}</div>
+                    </div>
+                  </div>
+                ))}
               </div>
-            )}
-
-            {sensorFetched && (
-              <>
-                <div className="form-row-2">
-                  <div className="sensor-field">
-                    <div className="sensor-field-icon" style={{ background: '#fff5f5', color: 'var(--risk-high)' }}>
-                      <FaThermometerHalf />
-                    </div>
-                    <div className="sensor-field-body">
-                      <div className="sensor-field-label">Temperature</div>
-                      <div className="sensor-field-value">{form.temperature} °C</div>
-                    </div>
-                    <span className={`badge ${+form.temperature > 30 ? 'badge-high' : 'badge-low'}`}>
-                      {+form.temperature > 35 ? 'Very High' : +form.temperature > 30 ? 'High' : 'Normal'}
-                    </span>
-                  </div>
-                  <div className="sensor-field">
-                    <div className="sensor-field-icon" style={{ background: '#ebf8ff', color: '#2b6cb0' }}>
-                      <FaTint />
-                    </div>
-                    <div className="sensor-field-body">
-                      <div className="sensor-field-label">Humidity</div>
-                      <div className="sensor-field-value">{form.humidity} %</div>
-                    </div>
-                    <span className={`badge ${+form.humidity > 75 ? 'badge-medium' : 'badge-low'}`}>
-                      {+form.humidity > 80 ? 'Very High' : +form.humidity > 70 ? 'High' : 'Normal'}
-                    </span>
-                  </div>
-                  <div className="sensor-field">
-                    <div className="sensor-field-icon" style={{ background: '#f0fff4', color: 'var(--risk-low)' }}>
-                      <FaFlask />
-                    </div>
-                    <div className="sensor-field-body">
-                      <div className="sensor-field-label">Ethylene Level</div>
-                      <div className="sensor-field-value">{form.ethyleneLevel} ppm</div>
-                    </div>
-                    <span className={`badge ${+form.ethyleneLevel > 3 ? 'badge-high' : +form.ethyleneLevel > 2 ? 'badge-medium' : 'badge-low'}`}>
-                      {+form.ethyleneLevel > 3 ? 'High' : +form.ethyleneLevel > 2 ? 'Moderate' : 'Low'}
-                    </span>
-                  </div>
-                  <div className="sensor-field">
-                    <div className="sensor-field-icon" style={{ background: '#fffaf0', color: 'var(--risk-medium)' }}>
-                      <FaFlask />
-                    </div>
-                    <div className="sensor-field-body">
-                      <div className="sensor-field-label">VOC Level</div>
-                      <div className="sensor-field-value">{form.vocLevel} ppm</div>
-                    </div>
-                    <span className={`badge ${+form.vocLevel > 2 ? 'badge-medium' : 'badge-low'}`}>
-                      {+form.vocLevel > 2 ? 'Elevated' : 'Normal'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* What was auto-detected */}
-                <div className="sensor-detected-summary">
-                  <div style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--text-medium)', marginBottom: 8 }}>
-                    <FaRobot style={{ marginRight: 6 }} />Also Auto-Detected from Sensor
-                  </div>
-                  <div className="sensor-detected-row">
-                    <span>Maturity Stage</span>
-                    <strong>{form.maturityStage}</strong>
-                  </div>
-                  <div className="sensor-detected-row">
-                    <span>Storage Condition</span>
-                    <strong>{form.storageCondition}</strong>
-                  </div>
-                </div>
-
-                <div className="sensor-note">
-                  <FaMicrochip /> All values auto-filled from hardware. Click "Refresh Data" to re-read.
-                </div>
-              </>
             )}
           </div>
         </div>
 
-        {/* Prediction Result */}
-        {prediction && (
-          <div className="card prediction-preview">
-            <div className="prediction-preview-header">
-              <FaCheckCircle style={{ color: 'var(--primary)', fontSize: '1.3rem' }} />
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-dark)' }}>
-                  Prediction Result
-                </div>
-                <div style={{ fontSize: '0.82rem', color: 'var(--text-light)' }}>
-                  <span className="demo-badge">Demo Prediction</span>
-                </div>
-              </div>
-            </div>
-            <div className="prediction-preview-stats">
-              <div className="pred-stat">
-                <div className="pred-stat-value" style={{ color: 'var(--primary)' }}>
-                  {prediction.shelfLife} Days
-                </div>
-                <div className="pred-stat-label">Remaining Shelf Life</div>
-              </div>
-              <div className="pred-stat">
-                <div className="pred-stat-value" style={{
-                  color: prediction.risk === 'High' ? 'var(--risk-high)' :
-                    prediction.risk === 'Medium' ? 'var(--risk-medium)' : 'var(--risk-low)'
-                }}>
-                  {prediction.risk}
-                </div>
-                <div className="pred-stat-label">Spoilage Risk</div>
-              </div>
-              <div className="pred-stat">
-                <div className="pred-stat-value" style={{ color: 'var(--primary)' }}>
-                  {prediction.confidence}%
-                </div>
-                <div className="pred-stat-label">Confidence</div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Action Buttons */}
         <div className="add-harvest-actions">
-          <button className="btn btn-outline" onClick={() => navigate('/dashboard')}>
-            Cancel
+          <button className="btn btn-outline" onClick={() => navigate('/dashboard')}>Cancel</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving || saved}>
+            {saving
+              ? <><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Saving...</>
+              : <><FaCheckCircle /> Save Harvest</>}
           </button>
-          <button className="btn btn-outline" onClick={handlePredict} disabled={loading}>
-            {loading && !prediction ? (
-              <><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Predicting...</>
-            ) : (
-              <><FaChartLine /> Predict Shelf Life</>
-            )}
-          </button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={loading || saved}>
-            {loading && prediction ? (
-              <><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Saving...</>
-            ) : (
-              <><FaCheckCircle /> Save Harvest</>
-            )}
-          </button>
+          {saved && (
+            <button className="btn btn-outline" onClick={handleGoToPredict} disabled={!sensorData}>
+              <FaChartLine /> View Prediction
+            </button>
+          )}
         </div>
       </div>
     </DashboardLayout>
