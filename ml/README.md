@@ -1,134 +1,83 @@
-# SmartCrate Machine Learning Service
+# SmartCrate ML Exploratory Baseline
 
-A self-contained Machine Learning pipeline, evaluation suite, saved models, feature lookup engines, and FastAPI microservice for **SmartCrate**.
+This directory contains an exploratory spoilage-risk classification baseline using `dataset/spoilage_sensor_starter.csv`.
 
----
+It is not a validated production model. The dataset's provenance, label-generation process, batch/session identity, and `ethylene_ppm` calibration are not established.
 
-## 📁 Directory Structure
+## Baseline
+
+- Target: `spoilage_risk`
+- Classes: `Low`, `Medium`, `High`
+- Model: class-balanced Logistic Regression
+- Features: `crop`, `maturity_stage`, `hours_since_harvest`, `temperature_c`, `humidity_percent`, `ethylene_ppm`, `voc_index`, `co2_ppm`
+- Excluded: `weight_loss_percent`, because it may be downstream of spoilage and leak the target
+- Categorical preprocessing: one-hot encoding
+- Numeric preprocessing: standard scaling
+- Split: stratified 80/20 train/test split with random seed 42
+
+No valid batch/session grouping key exists, so grouped splitting was not possible. Metrics must therefore be treated as exploratory only.
+
+## Commands
+
+From the repository root:
 
 ```text
-SmartCrate/ml/
-├── dataset/                              # Read-only original CSV datasets
-│   ├── smartcrate_combined_e_nose_dataset.csv
-│   ├── spoilage_sensor_starter.csv
-│   ├── market_prices.csv
-│   └── india_2000_2024_daily_weather.csv
-├── preprocessing/                        # Modular data transformation
-│   ├── __init__.py
-│   ├── sensor_preprocessing.py
-│   ├── spoilage_preprocessing.py
-│   ├── market_preprocessing.py
-│   └── weather_preprocessing.py
-├── training/                             # Model training modules
-│   ├── __init__.py
-│   ├── train_spoilage.py
-│   └── train_shelflife_template.py
-├── prediction/                           # Inference & lookup modules
-│   ├── __init__.py
-│   ├── predict_spoilage.py
-│   ├── predict_shelflife.py
-│   ├── market_lookup.py
-│   └── weather_lookup.py
-├── evaluation/                           # Model evaluation & metrics
-│   ├── __init__.py
-│   ├── metrics.py
-│   └── evaluate_spoilage.py
-├── models/                               # Serialized model artifacts
-│   ├── spoilage_model.joblib
-│   ├── spoilage_preprocessor.joblib
-│   ├── spoilage_encoder.joblib
-│   └── spoilage_metadata.joblib
-├── notebooks/                            # Analysis scripts & test suite
-│   ├── dataset_analysis.py
-│   └── test_pipeline_and_api.py
-├── app.py                                # FastAPI Microservice
-├── requirements.txt                      # Dependencies
-└── README.md                             # Documentation
+python ml/src/train_spoilage_model.py
+python ml/src/evaluate_spoilage_model.py
 ```
 
----
+Training writes:
 
-## 📊 Dataset Analysis & Verification
+- `ml/models/spoilage_risk_baseline.joblib`
+- `ml/reports/spoilage_risk_baseline_metrics.json`
 
-All four original datasets located in `ml/dataset/` are kept read-only and preserved:
+The model is not connected to Node.js, React, or a FastAPI service.
 
-| Dataset | Row Count | Column Count | Actual Columns Found | Purpose |
-|---|---|---|---|---|
-| `spoilage_sensor_starter.csv` | 5,000 | 10 | `crop`, `maturity_stage`, `hours_since_harvest`, `temperature_c`, `humidity_percent`, `ethylene_ppm`, `voc_index`, `co2_ppm`, `weight_loss_percent`, `spoilage_risk` | Classification of produce spoilage risk (`Low`, `Medium`, `High`). |
-| `smartcrate_combined_e_nose_dataset.csv` | 295,000 | 12 | `source_file`, `fruit_label`, `ticks`, `mq2`, `mq3`, `mq4`, `mq5`, `mq6`, `mq7`, `mq8`, `mq9`, `mq135` | Multi-sensor gas readings across produce types (`mq2`-`mq9`, `mq135`). Preprocessed for gas feature extraction. |
-| `market_prices.csv` | 5,000 | 10 | `STATE`, `District Name`, `Market Name`, `Commodity`, `Variety`, `Grade`, `Min_Price`, `Max_Price`, `Modal_Price`, `Price Date` | Agricultural commodity price historical lookup engine across markets. |
-| `india_2000_2024_daily_weather.csv` | 91,320 | 12 | `city`, `date`, `temperature_2m_max`, `temperature_2m_min`, `apparent_temperature_max`, `apparent_temperature_min`, `precipitation_sum`, `rain_sum`, `weather_code`, `wind_speed_10m_max`, `wind_gusts_10m_max`, `wind_direction_10m_dominant` | Historical weather conditions & climate indicators for Indian cities. |
+## Exploratory inference service
 
----
+The standalone FastAPI service loads the existing Phase 4B artifact once at startup:
 
-## 🤖 Trained Models vs Un-Trained Templates
-
-| Model | Status | Trained Algorithm | Accuracy / Metrics | Reason |
-|---|---|---|---|---|
-| **Spoilage Risk Classifier** | ✅ Trained & Active | RandomForestClassifier (vs GradientBoosting) | **Accuracy: 85.60%**, **Weighted F1: 0.8526** | Trained on 5,000 labeled sensor records in `spoilage_sensor_starter.csv`. |
-| **Shelf-Life Predictor** | ⏳ Un-Trained Template | N/A | N/A | None of the 4 datasets contain a remaining shelf-life target column (e.g. `remaining_shelf_life_days`). Ready for training once labeled dataset is added. |
-| **E-Nose Gas Feature Pipeline** | ⚙️ Preprocessing Built | N/A | N/A | Dataset contains fruit type label (`fruit_label`), not a spoilage target. Preprocessing and scaling module built; no fake classification model trained. |
-
----
-
-## 🚀 Getting Started
-
-### 1. Install Dependencies
-```bash
-pip install -r ml/requirements.txt
+```text
+ml/models/spoilage_risk_baseline.joblib
 ```
 
-### 2. Run Dataset Analysis
-```bash
-python ml/notebooks/dataset_analysis.py
+Install the service dependencies:
+
+```text
+python -m pip install -r ml/requirements.txt
 ```
 
-### 3. Train & Save Spoilage Model
-```bash
-python ml/training/train_spoilage.py
+Run from the repository root:
+
+```text
+python -m uvicorn ml.src.api:app --host 0.0.0.0 --port 8000
 ```
 
-### 4. Run API Test Suite
-```bash
-python ml/notebooks/test_pipeline_and_api.py
-```
+The service is an exploratory wrapper around the saved baseline. It does not claim production accuracy and does not retrain or substitute a model when the artifact is unavailable.
 
-### 5. Launch FastAPI Microservice
-```bash
-uvicorn ml.app:app --host 0.0.0.0 --port 8000 --reload
-```
+The artifact was created with scikit-learn 1.8.0. Run the service with a compatible scikit-learn environment and treat version-mismatch warnings as a deployment blocker to resolve before relying on predictions.
 
----
+### Endpoints
 
-## 📡 API Endpoint Reference
+`GET /health` reports service status, model availability, model version, and source.
 
-### `GET /health`
-Returns service status.
+`POST /predict/spoilage-risk` accepts exactly the features used by the saved pipeline:
 
-### `GET /model/status`
-Returns status of all models, algorithms, metric logs, and missing model explanations.
-
-### `POST /predict/spoilage-risk`
-Predicts spoilage risk (`Low`, `Medium`, `High`) and class probabilities from sensor input payload.
 ```json
 {
-  "crop": "Tomato",
-  "maturity_stage": "Ripe",
-  "hours_since_harvest": 24.0,
-  "temperature_c": 25.5,
-  "humidity_percent": 85.0,
-  "ethylene_ppm": 4.2,
-  "voc_index": 120.0,
-  "co2_ppm": 650.0,
-  "weight_loss_percent": 2.1
+	"crop": "Tomato",
+	"maturity_stage": "Fully Ripe",
+	"hours_since_harvest": 24,
+	"temperature_c": 25.5,
+	"humidity_percent": 60,
+	"ethylene_ppm": 1.2,
+	"voc_index": 0.8,
+	"co2_ppm": 420
 }
 ```
 
-### `POST /predict/shelf-life`
-Returns structured response detailing un-trained model status and missing dataset rationale.
+The response contains `spoilage_risk`, model probabilities when supported by the loaded artifact, model metadata, and a UTC prediction timestamp. The service rejects extra fields and out-of-domain numeric values with HTTP 422.
 
-### `POST /market/lookup`
-Looks up historical crop market prices, min/max/modal prices, and market locations.
+FastAPI OpenAPI documentation is available at `/docs` and `/redoc` when the service is running.
 
-### `POST /weather/lookup`
-Looks up historical daily weather averages, precipitation totals, and extreme climate days.
+`POST /predict/shelf-life` validates prediction-time fields but returns HTTP 503 with `SHELF_LIFE_MODEL_NOT_READY` while the longitudinal-data threshold is unmet. It never returns a shelf-life number without a trained artifact. See [Phase 11 shelf-life readiness](../docs/PHASE11_SHELF_LIFE_MODEL_READINESS.md) for the current gate result and data contract.

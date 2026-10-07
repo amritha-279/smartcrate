@@ -1,35 +1,39 @@
 import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../layouts/DashboardLayout';
 import NotificationCard from '../components/NotificationCard';
-import { useAuth } from '../context/AuthContext';
-import { getNotifications, markRead, markAllRead } from '../services/notificationService';
+import { getNotifications, markAllNotificationsRead, markNotificationRead } from '../api/notificationApi';
 import { FaBell, FaCheckDouble } from 'react-icons/fa';
 
-export default function Notifications({ onLogout }) {
-  const { farmer } = useAuth();
+export default function Notifications({ farmer, onLogout }) {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let mounted = true;
     getNotifications()
-      .then(res => setNotifications(res.data))
-      .catch(() => setError('Failed to load notifications.'))
-      .finally(() => setLoading(false));
+      .then((response) => { if (mounted) setNotifications(response.data || []); })
+      .catch((apiError) => { if (mounted) setError(apiError.response?.data?.message || 'Unable to load notifications.'); })
+      .finally(() => { if (mounted) setLoading(false); });
+    return () => { mounted = false; };
   }, []);
 
-  const handleMarkRead = async (id) => {
+  const markRead = async (id) => {
     try {
-      await markRead(id);
-      setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n));
-    } catch {}
+      const response = await markNotificationRead(id);
+      setNotifications((previous) => previous.map((item) => (item._id || item.id) === id ? response.data : item));
+    } catch (apiError) {
+      setError(apiError.response?.data?.message || 'Unable to update notification.');
+    }
   };
 
-  const handleMarkAllRead = async () => {
+  const markAllRead = async () => {
     try {
-      await markAllRead();
-      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    } catch {}
+      await markAllNotificationsRead();
+      setNotifications((previous) => previous.map((item) => ({ ...item, read: true })));
+    } catch (apiError) {
+      setError(apiError.response?.data?.message || 'Unable to update notifications.');
+    }
   };
 
   const unread = notifications.filter(n => !n.read).length;
@@ -45,22 +49,22 @@ export default function Notifications({ onLogout }) {
             </p>
           </div>
           {unread > 0 && (
-            <button className="btn btn-outline btn-sm" onClick={handleMarkAllRead}>
+            <button className="btn btn-outline btn-sm" onClick={markAllRead}>
               <FaCheckDouble /> Mark All as Read
             </button>
           )}
         </div>
 
-        {loading ? (
-          <div className="flex-center" style={{ padding: 40 }}><span className="spinner" /></div>
-        ) : error ? (
-          <div className="alert alert-error">{error}</div>
-        ) : notifications.length === 0 ? (
-          <div className="empty-state"><FaBell /><p>No notifications yet.</p></div>
+        {error && <div className="alert alert-error">{error}</div>}
+        {loading ? <div className="empty-state">Loading notifications...</div> : notifications.length === 0 ? (
+          <div className="empty-state">
+            <FaBell />
+            <p>No notifications yet.</p>
+          </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {notifications.map(n => (
-              <NotificationCard key={n._id} notification={n} onMarkRead={() => handleMarkRead(n._id)} />
+              <NotificationCard key={n.id} notification={n} onMarkRead={markRead} />
             ))}
           </div>
         )}

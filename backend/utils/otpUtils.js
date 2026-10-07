@@ -1,4 +1,4 @@
-const OTP = require('../models/OTP');
+const prisma = require('../config/prisma');
 
 /**
  * Generates and stores an OTP for a mobile number.
@@ -7,33 +7,41 @@ const OTP = require('../models/OTP');
  */
 const generateOTP = async (mobile) => {
   const isDev = process.env.NODE_ENV === 'development';
+  if (!isDev && process.env.NODE_ENV !== 'test') {
+    const error = new Error('OTP delivery is not configured for this environment');
+    error.statusCode = 503;
+    throw error;
+  }
+
   const otp = isDev ? process.env.DEMO_OTP : Math.floor(1000 + Math.random() * 9000).toString();
 
   const expiresAt = new Date(Date.now() + (process.env.OTP_EXPIRES_MINUTES || 10) * 60 * 1000);
 
   // Remove any existing unused OTPs for this mobile
-  await OTP.deleteMany({ mobile, used: false });
+  await prisma.otp.deleteMany({ where: { mobile, used: false } });
 
-  await OTP.create({ mobile, otp, expiresAt });
+  await prisma.otp.create({ data: { mobile, otp, expiresAt } });
 
-  if (!isDev) {
-    // TODO: await sendSMS(mobile, `Your SmartCrate OTP is ${otp}. Valid for 10 minutes.`);
-    console.log(`[PRODUCTION] OTP for ${mobile} should be sent via SMS provider`);
-  } else {
+  if (isDev) {
     console.log(`[DEV] OTP for ${mobile}: ${otp}`);
   }
 
   return otp;
 };
 
-const verifyOTP = async (mobile, otp) => {
-  const record = await OTP.findOne({ mobile, used: false });
+const verifyOTP = async (mobile, otp, { consume = true } = {}) => {
+  const record = await prisma.otp.findFirst({ where: { mobile, used: false } });
   if (!record) return { valid: false, message: 'OTP not found or already used' };
   if (new Date() > record.expiresAt) return { valid: false, message: 'OTP has expired' };
   if (record.otp !== otp) return { valid: false, message: 'Invalid OTP' };
 
-  record.used = true;
-  await record.save();
+  if (consume) {
+    const result = await prisma.otp.updateMany({
+      where: { id: record.id, used: false, expiresAt: { gt: new Date() } },
+      data: { used: true },
+    });
+    if (result.count === 0) return { valid: false, message: 'OTP not found or already used' };
+  }
   return { valid: true };
 };
 
