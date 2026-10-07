@@ -24,11 +24,11 @@ export default function Sidebar({ farmer, onLogout }) {
   const navigate = useNavigate();
 
   const handleLogout = () => {
-    if (onLogout) onLogout();
+    onLogout && onLogout();
     navigate('/login');
   };
 
-  const renderSidebarContent = () => (
+  const SidebarContent = () => (
     <div className="sidebar">
       <div className="sidebar-logo">
         <div className="sidebar-logo-icon"><FaLeaf /></div>
@@ -52,7 +52,7 @@ export default function Sidebar({ farmer, onLogout }) {
       </div>
 
       <nav className="sidebar-nav">
-        {navItems.filter((item) => item.path !== '/admin' || farmer?.role === 'admin').map((item) => (
+        {navItems.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
@@ -82,14 +82,14 @@ export default function Sidebar({ farmer, onLogout }) {
 
       {/* Desktop sidebar */}
       <div className="sidebar-desktop">
-        {renderSidebarContent()}
+        <SidebarContent />
       </div>
 
       {/* Mobile overlay */}
       {mobileOpen && (
         <div className="sidebar-overlay" onClick={() => setMobileOpen(false)}>
           <div className="sidebar-mobile" onClick={(e) => e.stopPropagation()}>
-            {renderSidebarContent()}
+            <SidebarContent />
           </div>
         </div>
       )}

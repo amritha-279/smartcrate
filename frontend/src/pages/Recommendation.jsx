@@ -1,427 +1,156 @@
 import React, { useEffect, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import DashboardLayout from '../layouts/DashboardLayout';
+import RecommendationCard from '../components/RecommendationCard';
+import MarketCard from '../components/MarketCard';
 import RiskBadge from '../components/RiskBadge';
-import { getHarvests } from '../api/harvestApi';
-import { generateRecommendation, getLatestRecommendation } from '../api/recommendationApi';
-import { submitFeedback } from '../api/feedbackApi';
-import { getQualityObservations, submitQualityObservation } from '../api/qualityObservationApi';
-import { formatCurrency } from '../utils/predictionUtils';
-import { FaArrowRight, FaSeedling } from 'react-icons/fa';
+import { useAuth } from '../context/AuthContext';
+import { generateRecommendation, getLatestRecommendation } from '../services/recommendationService';
+import { getHarvest } from '../services/harvestService';
+import { FaSeedling, FaArrowRight, FaTable, FaSyncAlt } from 'react-icons/fa';
 import './Recommendation.css';
 
-const displayValue = (value, formatter = (item) => item) => value === null || value === undefined ? 'Unavailable' : formatter(value);
-
-export default function Recommendation({ farmer, onLogout }) {
-  const location = useLocation();
+export default function Recommendation({ onLogout }) {
+  const { harvestId } = useParams();
   const navigate = useNavigate();
-  const [harvest, setHarvest] = useState(location.state?.harvest || null);
-  const [recommendation, setRecommendation] = useState(null);
+  const { farmer } = useAuth();
+  const [harvest, setHarvest] = useState(null);
+  const [rec, setRec] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
-  const [feedbackForm, setFeedbackForm] = useState({
-    actualSaleStatus: 'Not Reported',
-    actualSellingPrice: '',
-    soldQuantity: '',
-    spoiledQuantity: '',
-    actualSpoilageOutcome: 'Not Reported',
-    actualQuality: 'Not Reported',
-    recommendationHelpful: '',
-    recommendationFollowed: '',
-    predictionAccurate: '',
-    actualMarket: '',
-    comments: '',
-    observedAt: '',
-  });
-  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
-  const [feedbackMessage, setFeedbackMessage] = useState('');
-  const [qualityObservations, setQualityObservations] = useState([]);
-  const [qualityForm, setQualityForm] = useState({
-    qualityGrade: 'Unknown',
-    saleabilityStatus: 'UNKNOWN',
-    visibleSpoilage: 'UNKNOWN',
-    observedAt: new Date().toISOString().slice(0, 16),
-    comments: '',
-    labelConfidence: 'uncertain',
-    isEndOfSaleableLife: false,
-    endOfSaleableLifeTimestamp: '',
-  });
-  const [qualitySubmitting, setQualitySubmitting] = useState(false);
-  const [qualityMessage, setQualityMessage] = useState('');
-  const [qualityError, setQualityError] = useState('');
+  const [view, setView] = useState('cards');
 
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try {
-        let selected = location.state?.harvest;
-        if (!selected) {
-          const harvests = await getHarvests('Active');
-          selected = harvests.data[0];
-        }
-        if (!selected?._id && !selected?.id) throw new Error('Select a harvest before generating a decision.');
-        const harvestId = selected._id || selected.id;
-        let response;
-        try {
-          response = await getLatestRecommendation(harvestId);
-        } catch (latestError) {
-          if (latestError.response?.status !== 404) throw latestError;
-          response = await generateRecommendation(harvestId);
-        }
-        if (mounted) {
-          setHarvest(selected);
-          setRecommendation(response.data);
-          await loadQualityObservations(selected._id || selected.id);
-        }
-      } catch (apiError) {
-        if (mounted) setError(apiError.response?.data?.message || apiError.message || 'Unable to load the market decision.');
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    };
-    load();
-    return () => { mounted = false; };
-  }, [location.state]);
-
-  const decision = recommendation?.decision || 'INSUFFICIENT_DATA';
-  const markets = recommendation?.markets || [];
-
-  const handleFeedbackChange = (event) => {
-    const { name, value, type, checked } = event.target;
-    setFeedbackForm((prev) => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value,
-    }));
-  };
-
-  const handleQualityChange = (event) => {
-    const { name, value } = event.target;
-    setQualityForm((prev) => ({ ...prev, [name]: value }));
-  };
-
-  async function loadQualityObservations(harvestId) {
+  const load = async () => {
+    if (!harvestId) { setError('No harvest selected.'); setLoading(false); return; }
+    setLoading(true);
     try {
-      const response = await getQualityObservations(harvestId);
-      setQualityObservations(response.data || []);
+      const [hRes, rRes] = await Promise.allSettled([
+        getHarvest(harvestId),
+        getLatestRecommendation(harvestId),
+      ]);
+      if (hRes.status === 'fulfilled') setHarvest(hRes.value.data);
+      if (rRes.status === 'fulfilled') setRec(rRes.value.data);
     } catch {
-      setQualityObservations([]);
-    }
-  }
-
-  const handleQualitySubmit = async (event) => {
-    event.preventDefault();
-    if (!harvest?._id && !harvest?.id) return;
-    setQualitySubmitting(true);
-    setQualityMessage('');
-    setQualityError('');
-
-    try {
-      const payload = {
-        ...qualityForm,
-        observedAt: qualityForm.observedAt ? new Date(qualityForm.observedAt).toISOString() : new Date().toISOString(),
-        endOfSaleableLifeTimestamp: qualityForm.isEndOfSaleableLife && qualityForm.endOfSaleableLifeTimestamp
-          ? new Date(qualityForm.endOfSaleableLifeTimestamp).toISOString()
-          : undefined,
-      };
-      await submitQualityObservation(harvest._id || harvest.id, payload);
-      setQualityMessage('Quality observation saved successfully.');
-      setQualityForm((prev) => ({ ...prev, comments: '', observedAt: new Date().toISOString().slice(0, 16), isEndOfSaleableLife: false, endOfSaleableLifeTimestamp: '' }));
-      await loadQualityObservations(harvest._id || harvest.id);
-    } catch (apiError) {
-      setQualityError(apiError.response?.data?.message || 'Unable to save the quality observation.');
+      setError('Failed to load recommendation.');
     } finally {
-      setQualitySubmitting(false);
+      setLoading(false);
     }
   };
 
-  const handleFeedbackSubmit = async (event) => {
-    event.preventDefault();
-    if (!harvest?._id && !harvest?.id) return;
-    setFeedbackSubmitting(true);
+  useEffect(() => { load(); }, [harvestId]);
+
+  const handleGenerate = async () => {
+    setGenerating(true);
     setError('');
-    setFeedbackMessage('');
-
     try {
-      const payload = {
-        harvestId: harvest._id || harvest.id,
-        predictionId: recommendation?.predictionId || undefined,
-        recommendationId: recommendation?._id || recommendation?.id || undefined,
-        ...feedbackForm,
-        actualSellingPrice: feedbackForm.actualSellingPrice === '' ? undefined : Number(feedbackForm.actualSellingPrice),
-        soldQuantity: feedbackForm.soldQuantity === '' ? undefined : Number(feedbackForm.soldQuantity),
-        spoiledQuantity: feedbackForm.spoiledQuantity === '' ? undefined : Number(feedbackForm.spoiledQuantity),
-        recommendationHelpful: feedbackForm.recommendationHelpful,
-        recommendationFollowed: feedbackForm.recommendationFollowed,
-        predictionAccurate: feedbackForm.predictionAccurate,
-        observedAt: feedbackForm.observedAt ? new Date(feedbackForm.observedAt).toISOString() : undefined,
-      };
-      ['recommendationHelpful', 'recommendationFollowed', 'predictionAccurate'].forEach((field) => {
-        payload[field] = feedbackForm[field] === '' ? undefined : feedbackForm[field] === 'true';
-      });
-
-      await submitFeedback(payload);
-      setFeedbackMessage('Outcome report saved successfully.');
-      setFeedbackForm((prev) => ({ ...prev, actualSellingPrice: '', soldQuantity: '', spoiledQuantity: '', actualMarket: '', comments: '', observedAt: '', recommendationHelpful: '', recommendationFollowed: '', predictionAccurate: '' }));
-    } catch (apiError) {
-      setError(apiError.response?.data?.message || 'Unable to save the outcome report.');
+      const res = await generateRecommendation(harvestId);
+      setRec(res.data);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to generate recommendation.');
     } finally {
-      setFeedbackSubmitting(false);
+      setGenerating(false);
     }
   };
+
+  const crop = harvest?.crop || '';
+  const qty = harvest?.quantity || 0;
 
   return (
-    <DashboardLayout farmer={farmer} pageTitle="Market Decision" onLogout={onLogout}>
+    <DashboardLayout farmer={farmer} pageTitle="Selling Recommendation" onLogout={onLogout}>
       <div className="page-content">
-        <h1 className="page-title">Market Decision</h1>
-        <p className="page-subtitle">A transparent decision from your harvest, prediction, and available market data.</p>
-        {error && <div className="alert alert-error">{error}</div>}
-        {loading ? <div className="empty-state"><span className="spinner" /><p>Loading decision...</p></div> : !recommendation ? null : (
+        <h1 className="page-title">Selling Recommendation</h1>
+        <p className="page-subtitle">Based on your crop condition and current market prices.</p>
+
+        {loading ? (
+          <div className="flex-center" style={{ padding: 40 }}><span className="spinner" /></div>
+        ) : error ? (
+          <div className="alert alert-error">{error}</div>
+        ) : (
           <>
-            <div className="card rec-harvest-summary">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                <FaSeedling style={{ color: 'var(--primary)', fontSize: '1.4rem' }} />
-                <strong>{harvest?.crop} | {harvest?.quantity} {harvest?.unit || 'kg'}</strong>
-                <RiskBadge risk={recommendation.risk?.level || 'Unknown'} />
-                <span style={{ marginLeft: 'auto' }}>{recommendation.shelfLife?.available
-                  ? `Remaining shelf life: ${recommendation.shelfLife.remainingDays} days`
-                  : 'Shelf-life model: Data collection in progress'}</span>
-              </div>
-            </div>
-
-            <div className="rec-main-grid">
-              <div className="card">
-                <div className="section-title">{decision}</div>
-                <p><strong>Status:</strong> {recommendation.status || 'Unavailable'}</p>
-                <div style={{ marginTop: 16 }}>
-                  <strong>Why this decision</strong>
-                  <ul>{(recommendation.reasons || []).map((reason) => <li key={reason}>{reason}</li>)}</ul>
+            {harvest && (
+              <div className="card rec-harvest-summary" style={{ marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 10, background: 'var(--primary-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', fontSize: '1.1rem' }}>
+                    <FaSeedling />
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 700, color: 'var(--text-dark)' }}>{crop} — {qty} kg</div>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--text-light)' }}>Harvested: {harvest.harvestDate?.slice(0, 10)}</div>
+                  </div>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center' }}>
+                    {rec && <><div style={{ textAlign: 'center' }}><div style={{ fontWeight: 800, fontSize: '1.2rem', color: 'var(--primary)' }}>{rec.remainingShelfLife} Days</div><div style={{ fontSize: '0.75rem', color: 'var(--text-light)' }}>Shelf Life</div></div><RiskBadge risk={rec.spoilageRisk} /></>}
+                  </div>
                 </div>
               </div>
-              <div className="card">
-                <div className="section-title">Data quality</div>
-                <p>Price fresh: {recommendation.dataQuality?.marketPriceFresh ? 'Yes' : 'No'}</p>
-                <p>Transport cost: {recommendation.dataQuality?.transportCostAvailable ? 'Available' : 'Unavailable'}</p>
-                <p>Distance: {recommendation.dataQuality?.distanceAvailable ? 'Available' : 'Unavailable'}</p>
-                <p>Travel time: {recommendation.dataQuality?.travelTimeAvailable ? 'Available' : 'Unavailable'}</p>
-                <p>Confidence: Unavailable</p>
-              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
+              <button className="btn btn-primary" onClick={handleGenerate} disabled={generating}>
+                {generating ? <><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Generating...</> : <><FaSyncAlt /> {rec ? 'Regenerate' : 'Generate Recommendation'}</>}
+              </button>
             </div>
 
-            <div style={{ marginTop: 28 }}>
-              <div className="section-header"><div className="section-title">Market factors</div><button className="btn btn-outline btn-sm" onClick={() => navigate('/markets')}>View Markets <FaArrowRight /></button></div>
-              <div className="card table-wrap">
-                <table>
-                  <thead><tr><th>Market</th><th>Price</th><th>Source</th><th>Observed</th><th>Fresh</th><th>Distance</th><th>Travel</th><th>Transport</th><th>Gross</th><th>Net</th></tr></thead>
-                  <tbody>{markets.map((market) => (
-                    <tr key={String(market.marketId)}>
-                      <td>{market.marketName}</td>
-                      <td>{displayValue(market.price, (value) => `${market.currency || ''} ${value}/${market.unit || ''}`)}</td>
-                      <td>{market.source && /mock|sample|development/i.test(market.source) ? `Development sample (${market.source})` : displayValue(market.source)}</td>
-                      <td>{displayValue(market.observedAt, (value) => new Date(value).toLocaleString())}</td>
-                      <td>{market.priceFresh ? 'Yes' : 'No'}</td>
-                      <td>{displayValue(market.distanceKm, (value) => `${value} km`)}</td>
-                      <td>{displayValue(market.travelTimeMinutes, (value) => `${value} min`)}</td>
-                      <td>{displayValue(market.transportCost, (value) => formatCurrency(value))}</td>
-                      <td>{displayValue(market.grossValue, (value) => formatCurrency(value))}</td>
-                      <td>{displayValue(market.netValue, (value) => formatCurrency(value))}</td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 28 }}>
-              <div className="section-title">Observed quality and saleability</div>
-              <div className="card" style={{ marginBottom: 18 }}>
-                <p style={{ marginTop: 0, color: 'var(--text-light)' }}>SENSOR DATA is separate from OBSERVED QUALITY. Record the farmer’s direct assessment here to support future shelf-life labeling without claiming a trained shelf-life model exists yet.</p>
-                <p style={{ marginBottom: 20, color: 'var(--text-medium)' }}><strong>Shelf-life model:</strong> Data collection in progress</p>
-                {qualityError && <div className="alert alert-error">{qualityError}</div>}
-                {qualityMessage && <div className="alert alert-success">{qualityMessage}</div>}
-                <form onSubmit={handleQualitySubmit}>
-                  <div className="feedback-form-grid">
-                    <div className="form-group">
-                      <label htmlFor="qualityGrade">Current quality</label>
-                      <select id="qualityGrade" name="qualityGrade" value={qualityForm.qualityGrade} onChange={handleQualityChange}>
-                        <option value="Unknown">Unknown</option>
-                        <option value="Good">Good</option>
-                        <option value="Excellent">Excellent</option>
-                        <option value="Fair">Fair</option>
-                        <option value="Poor">Poor</option>
-                        <option value="Unknown">Unknown</option>
-                      </select>
+            {!rec ? (
+              <div className="alert alert-info">Click "Generate Recommendation" to get a selling decision based on the latest prediction and market prices.</div>
+            ) : (
+              <>
+                <div className="rec-main-grid">
+                  <RecommendationCard action={rec.action} reasons={rec.reasons} alternatives={[]} />
+                  {rec.marketsConsidered?.[0] && (
+                    <div className="card rec-best-market">
+                      <div className="section-title" style={{ marginBottom: 16 }}>Best Market Option</div>
+                      <MarketCard
+                        market={{ name: rec.marketsConsidered[0].marketName, distance: rec.marketsConsidered[0].distance, travelTime: rec.marketsConsidered[0].travelTime, transportCost: rec.marketsConsidered[0].transportCost, prices: { [crop]: rec.marketsConsidered[0].pricePerKg } }}
+                        crop={crop} quantity={qty} isRecommended={true}
+                      />
+                      <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: 14 }} onClick={() => navigate('/markets')}>
+                        View All Markets <FaArrowRight />
+                      </button>
                     </div>
-                    <div className="form-group">
-                      <label htmlFor="saleabilityStatus">Saleability</label>
-                      <select id="saleabilityStatus" name="saleabilityStatus" value={qualityForm.saleabilityStatus} onChange={handleQualityChange}>
-                        <option value="UNKNOWN">UNKNOWN</option>
-                        <option value="SALEABLE">SALEABLE</option>
-                        <option value="BORDERLINE">BORDERLINE</option>
-                        <option value="NOT_SALEABLE">NOT_SALEABLE</option>
-                        <option value="UNKNOWN">UNKNOWN</option>
-                      </select>
-                    </div>
-                    <div className="form-group">
-                      <label htmlFor="visibleSpoilage">Visible spoilage</label>
-                      <select id="visibleSpoilage" name="visibleSpoilage" value={qualityForm.visibleSpoilage} onChange={handleQualityChange}>
-                        <option value="UNKNOWN">UNKNOWN</option>
-                        <option value="NONE">NONE</option>
-                        <option value="PARTIAL">PARTIAL</option>
-                        <option value="SEVERE">SEVERE</option>
-                        <option value="UNKNOWN">UNKNOWN</option>
-                      </select>
-                    </div>
-                    <div className="form-group">
-                      <label htmlFor="observedAt">Observation time</label>
-                      <input id="observedAt" name="observedAt" type="datetime-local" value={qualityForm.observedAt} onChange={handleQualityChange} />
-                    </div>
-                  </div>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16 }}>
-                    <input
-                      type="checkbox"
-                      name="isEndOfSaleableLife"
-                      checked={qualityForm.isEndOfSaleableLife}
-                      onChange={(event) => setQualityForm((previous) => ({
-                        ...previous,
-                        isEndOfSaleableLife: event.target.checked,
-                        saleabilityStatus: event.target.checked ? 'NOT_SALEABLE' : previous.saleabilityStatus,
-                      }))}
-                    />
-                    This observation documents the end of saleable life
-                  </label>
-                  {qualityForm.isEndOfSaleableLife && <div className="form-group" style={{ marginTop: 12 }}>
-                    <label htmlFor="endOfSaleableLifeTimestamp">Documented endpoint time</label>
-                    <input
-                      id="endOfSaleableLifeTimestamp"
-                      name="endOfSaleableLifeTimestamp"
-                      type="datetime-local"
-                      value={qualityForm.endOfSaleableLifeTimestamp}
-                      onChange={handleQualityChange}
-                      required
-                    />
-                  </div>}
-                  <div className="form-group" style={{ marginTop: 16 }}>
-                    <label htmlFor="comments">Quality notes</label>
-                    <textarea id="comments" name="comments" value={qualityForm.comments} onChange={handleQualityChange} placeholder="Record visible condition, firmness, color, odor, and any saleability notes." />
-                  </div>
-                  <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
-                    <button type="submit" className="btn btn-primary" disabled={qualitySubmitting}>{qualitySubmitting ? 'Saving...' : 'Save quality observation'}</button>
-                  </div>
-                </form>
-              </div>
-              {qualityObservations.length > 0 && (
-                <div className="card">
-                  <div className="section-title">Recent observations</div>
-                  <table>
-                    <thead><tr><th>Observed</th><th>Quality</th><th>Saleability</th><th>Visible spoilage</th></tr></thead>
-                    <tbody>{qualityObservations.slice(0, 5).map((obs) => (
-                      <tr key={obs._id || obs.observedAt}>
-                        <td>{new Date(obs.observedAt).toLocaleString()}</td>
-                        <td>{obs.qualityGrade || 'Unknown'}</td>
-                        <td>{obs.saleabilityStatus || 'UNKNOWN'}</td>
-                        <td>{obs.visibleSpoilage || 'UNKNOWN'}</td>
-                      </tr>
-                    ))}</tbody>
-                  </table>
+                  )}
                 </div>
-              )}
-            </div>
 
-            <div style={{ marginTop: 28 }}>
-              <div className="section-title">Actual outcome tracking</div>
-              <div className="card">
-                <p style={{ marginTop: 0, color: 'var(--text-light)' }}>Enter the real result after the recommendation was applied. These fields are stored as farmer-reported facts and never overwrite the prediction model.</p>
-                {feedbackMessage && <div className="alert alert-success">{feedbackMessage}</div>}
-                <form onSubmit={handleFeedbackSubmit}>
-                  <div className="feedback-form-grid">
-                    <div className="form-group">
-                      <label htmlFor="actualSaleStatus">Sale status</label>
-                      <select id="actualSaleStatus" name="actualSaleStatus" value={feedbackForm.actualSaleStatus} onChange={handleFeedbackChange}>
-                        <option value="Not Reported">Not Reported</option>
-                        <option value="Sold">Sold</option>
-                        <option value="Not Sold">Not Sold</option>
-                        <option value="Spoiled">Spoiled</option>
-                        <option value="Stored">Stored</option>
-                        <option value="Discarded">Discarded</option>
-                      </select>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="actualSellingPrice">Actual selling price</label>
-                      <input id="actualSellingPrice" name="actualSellingPrice" type="number" min="0" step="0.01" value={feedbackForm.actualSellingPrice} onChange={handleFeedbackChange} placeholder="e.g. 28" />
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="soldQuantity">Sold quantity</label>
-                      <input id="soldQuantity" name="soldQuantity" type="number" min="0" step="0.01" value={feedbackForm.soldQuantity} onChange={handleFeedbackChange} placeholder="kg" />
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="spoiledQuantity">Spoiled quantity</label>
-                      <input id="spoiledQuantity" name="spoiledQuantity" type="number" min="0" step="0.01" value={feedbackForm.spoiledQuantity} onChange={handleFeedbackChange} placeholder="kg" />
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="actualMarket">Actual market</label>
-                      <input id="actualMarket" name="actualMarket" type="text" value={feedbackForm.actualMarket} onChange={handleFeedbackChange} placeholder="Market name" />
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="actualSpoilageOutcome">Actual spoilage outcome</label>
-                      <select id="actualSpoilageOutcome" name="actualSpoilageOutcome" value={feedbackForm.actualSpoilageOutcome} onChange={handleFeedbackChange}>
-                        <option value="Not Reported">Not Reported</option>
-                        <option value="No Spoilage">No Spoilage</option>
-                        <option value="Partial Spoilage">Partial Spoilage</option>
-                        <option value="Full Spoilage">Full Spoilage</option>
-                      </select>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="actualQuality">Observed quality</label>
-                      <select id="actualQuality" name="actualQuality" value={feedbackForm.actualQuality} onChange={handleFeedbackChange}>
-                        <option value="Not Reported">Not Reported</option>
-                        <option value="Excellent">Excellent</option>
-                        <option value="Good">Good</option>
-                        <option value="Fair">Fair</option>
-                        <option value="Poor">Poor</option>
-                      </select>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="observedAt">Observed date</label>
-                      <input id="observedAt" name="observedAt" type="datetime-local" value={feedbackForm.observedAt} onChange={handleFeedbackChange} />
-                    </div>
-                  </div>
-
-                  <div className="feedback-form-grid" style={{ marginTop: 18 }}>
-                    {[
-                      ['recommendationHelpful', 'Was the recommendation helpful?'],
-                      ['recommendationFollowed', 'Did you follow the recommendation?'],
-                      ['predictionAccurate', 'Did the prediction match the outcome?'],
-                    ].map(([name, label]) => (
-                      <div className="form-group" key={name}>
-                        <label htmlFor={name}>{label}</label>
-                        <select id={name} name={name} value={feedbackForm[name]} onChange={handleFeedbackChange}>
-                          <option value="">Not reported</option>
-                          <option value="true">Yes</option>
-                          <option value="false">No</option>
-                        </select>
+                {rec.marketsConsidered?.length > 0 && (
+                  <div style={{ marginTop: 28 }}>
+                    <div className="section-header">
+                      <div className="section-title">Market Comparison</div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className={`btn btn-sm ${view === 'cards' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setView('cards')}>Cards</button>
+                        <button className={`btn btn-sm ${view === 'table' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setView('table')}><FaTable /> Table</button>
                       </div>
-                    ))}
-                  </div>
+                    </div>
 
-                  <div className="form-group" style={{ marginTop: 16 }}>
-                    <label htmlFor="comments">Farmer notes</label>
-                    <textarea id="comments" name="comments" value={feedbackForm.comments} onChange={handleFeedbackChange} placeholder="Share what happened after the recommendation and market decision." />
+                    {view === 'cards' ? (
+                      <div className="grid-2">
+                        {rec.marketsConsidered.map((m, i) => (
+                          <MarketCard key={i} market={{ name: m.marketName, distance: m.distance, travelTime: m.travelTime, transportCost: m.transportCost, prices: { [crop]: m.pricePerKg } }} crop={crop} quantity={qty} isRecommended={i === 0} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="card table-wrap">
+                        <table>
+                          <thead><tr><th>Market</th><th>Distance</th><th>Price/kg</th><th>Transport</th><th>Gross Value</th><th>Net Value</th><th>Safe to Travel</th></tr></thead>
+                          <tbody>
+                            {rec.marketsConsidered.map((m, i) => (
+                              <tr key={i}>
+                                <td style={{ fontWeight: 600 }}>{m.marketName}</td>
+                                <td>{m.distance} km</td>
+                                <td style={{ fontWeight: 700, color: 'var(--primary)' }}>₹{m.pricePerKg}</td>
+                                <td>₹{m.transportCost}</td>
+                                <td>₹{m.grossValue?.toLocaleString('en-IN')}</td>
+                                <td style={{ fontWeight: 700 }}>₹{m.netValue?.toLocaleString('en-IN')}</td>
+                                <td>{m.safeToTravel ? <span className="badge badge-success">Yes</span> : <span className="badge badge-high">No</span>}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
-
-                  <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
-                    <button type="submit" className="btn btn-primary" disabled={feedbackSubmitting}>
-                      {feedbackSubmitting ? 'Saving...' : 'Save outcome report'}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
+                )}
+              </>
+            )}
           </>
         )}
       </div>
